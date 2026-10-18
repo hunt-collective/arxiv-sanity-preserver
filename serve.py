@@ -23,7 +23,8 @@ from flask import session
 
 from aslite.db import get_papers_db, get_metas_db, get_tags_db, get_last_active_db, get_email_db
 from aslite.db import load_features
-from aslite.search import build_index, search
+from aslite.search import build_index, search, to_arxiv_query
+from aslite.arxiv import search as arxiv_search
 
 # -----------------------------------------------------------------------------
 # inits and globals
@@ -58,8 +59,20 @@ def cached(name, fn):
     t, v = _cache.get(name, (0, None))
     if time.time() - t > CACHE_TTL:
         v = fn()
+        # drop expired entries, e.g. old arxiv searches, so the cache doesn't grow forever
+        for k in [k for k, (tk, _) in _cache.items() if time.time() - tk > CACHE_TTL]:
+            del _cache[k]
         _cache[name] = (time.time(), v)
     return v
+
+def get_features():
+    # None until compute.py has run at least once
+    def load():
+        try:
+            return load_features()
+        except (KeyError, FileNotFoundError):
+            return None
+    return cached('features', load)
 
 # -----------------------------------------------------------------------------
 # globals that manage the (lazy) loading of various state for a request
@@ -151,7 +164,9 @@ def svm_rank(tags: str = '', pid: str = '', C: float = 0.01):
         return [], [], []
 
     # load all of the features
-    features = cached('features', load_features)
+    features = get_features()
+    if features is None:
+        return [], [], []
     x, pids = features['x'], features['pids']
     n, d = x.shape
     ptoi, itop = {}, {}
@@ -160,8 +175,11 @@ def svm_rank(tags: str = '', pid: str = '', C: float = 0.01):
         itop[i] = p
 
     # construct the positive set
+    # papers fetched by a live arxiv search since compute.py last ran have no features yet, skip them
     y = np.zeros(n, dtype=np.float32)
     if pid:
+        if pid not in ptoi:
+            return [], [], []
         y[ptoi[pid]] = 1.0
     elif tags:
         tags_db = get_tags()
@@ -169,7 +187,8 @@ def svm_rank(tags: str = '', pid: str = '', C: float = 0.01):
         for tag, pids in tags_db.items():
             if tag in tags_filter_to:
                 for pid in pids:
-                    y[ptoi[pid]] = 1.0
+                    if pid in ptoi:
+                        y[ptoi[pid]] = 1.0
 
     if y.sum() == 0:
         return [], [], [] # there are no positives?
@@ -201,6 +220,25 @@ def search_rank(q: str = ''):
     index = cached('search_index', lambda: build_index(get_papers()))
     return search(q, index)
 
+def arxiv_rank(q: str = '', n: int = RET_NUM):
+    # live search of all of arxiv, for the top n results. the papers are saved
+    # to our database so that they can be rendered, tagged and inspected
+    aq = to_arxiv_query(q)
+    if not aq:
+        return [], []
+
+    def fetch():
+        papers = arxiv_search(aq, max_results=n)
+        with get_papers_db(flag='c') as pdb, get_metas_db(flag='c') as mdb:
+            for p in papers:
+                pdb[p['_id']] = p
+                mdb[p['_id']] = {'_time': p['_time']}
+        return [p['_id'] for p in papers]
+
+    pids = cached(('arxiv', aq, n), fetch)
+    scores = [len(pids) - i for i in range(len(pids))] # arxiv returns them in relevance order
+    return pids, scores
+
 # -----------------------------------------------------------------------------
 # primary application endpoints
 
@@ -220,7 +258,7 @@ def main():
     default_skip_have = 'no'
 
     # override variables with any provided options via the interface
-    opt_rank = request.args.get('rank', default_rank) # rank type. search|tags|pid|time|random
+    opt_rank = request.args.get('rank', default_rank) # rank type. arxiv|search|tags|pid|time|random
     opt_q = request.args.get('q', '') # search request in the text box
     opt_tags = request.args.get('tags', default_tags)  # tags to rank by if opt_rank == 'tag'
     opt_pid = request.args.get('pid', '')  # pid to find nearest neighbors to
@@ -229,10 +267,15 @@ def main():
     opt_svm_c = request.args.get('svm_c', '') # svm C parameter
     opt_page_number = request.args.get('page_number', '1') # page number for pagination
 
-    # if a query is given, override rank to be of type "search"
+    # if a query is given, search live on arxiv unless the local "search" of saved papers was chosen
     # this allows the user to simply hit ENTER in the search field and have the correct thing happen
-    if opt_q:
-        opt_rank = 'search'
+    if opt_q and opt_rank not in ('arxiv', 'search'):
+        opt_rank = 'arxiv'
+
+    try:
+        page_number = max(1, int(opt_page_number))
+    except ValueError:
+        page_number = 1
 
     # try to parse opt_svm_c into something sensible (a float)
     try:
@@ -242,7 +285,15 @@ def main():
 
     # rank papers: by tags, by time, by random
     words = [] # only populated in the case of svm rank
-    if opt_rank == 'search':
+    message = ''
+    if opt_rank == 'arxiv':
+        try:
+            pids, scores = arxiv_rank(q=opt_q, n=min(1000, page_number * RET_NUM))
+        except Exception as e:
+            print("arxiv search failed:", repr(e))
+            pids, scores = [], []
+            message = 'Could not reach arXiv right now, please try again in a moment.'
+    elif opt_rank == 'search':
         pids, scores = search_rank(q=opt_q)
     elif opt_rank == 'tags':
         pids, scores, words = svm_rank(tags=opt_tags, C=C)
@@ -272,10 +323,8 @@ def main():
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
     # crop the number of results to RET_NUM, and paginate
-    try:
-        page_number = max(1, int(opt_page_number))
-    except ValueError:
-        page_number = 1
+    if opt_q and not pids and not message:
+        message = 'No papers matched this search.'
     start_index = (page_number - 1) * RET_NUM # desired starting index
     end_index = min(start_index + RET_NUM, len(pids)) # desired ending index
     pids = pids[start_index:end_index]
@@ -295,6 +344,7 @@ def main():
     # build the page context information and render
     context = default_context()
     context['papers'] = papers
+    context['message'] = message
     context['tags'] = rtags
     context['words'] = words
     context['words_desc'] = "Here are the top 40 most positive and bottom 20 most negative weights of the SVM. If they don't look great then try tuning the regularization strength hyperparameter of the SVM, svm_c, above. Lower C is higher regularization."
@@ -319,13 +369,16 @@ def inspect():
         return "error, malformed pid" # todo: better error handling
 
     # load the tfidf vectors, the vocab, and the idf table
-    features = cached('features', load_features)
-    x = features['x']
-    idf = features['idf']
-    ivocab = {v:k for k,v in features['vocab'].items()}
-    pix = features['pids'].index(pid)
-    wixs = np.flatnonzero(np.asarray(x[pix].todense()))
+    features = get_features()
     words = []
+    if features is None or pid not in features['pids']:
+        wixs = [] # e.g. fetched by a live arxiv search since compute.py last ran
+    else:
+        x = features['x']
+        idf = features['idf']
+        ivocab = {v:k for k,v in features['vocab'].items()}
+        pix = features['pids'].index(pid)
+        wixs = np.flatnonzero(np.asarray(x[pix].todense()))
     for ix in wixs:
         words.append({
             'word': ivocab[ix],

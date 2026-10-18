@@ -296,3 +296,9 @@ body {
     color: #009;
     text-decoration: underline;
 }
+
+#message {
+    text-align: center;
+    margin: 20px;
+    color: #555;
+}
