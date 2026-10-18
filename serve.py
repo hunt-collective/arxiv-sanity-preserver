@@ -10,29 +10,33 @@ ideas:
 import os
 import re
 import time
+import secrets
 from random import shuffle
 
 import numpy as np
 from sklearn import svm
 
-from flask import Flask, request, redirect, url_for
+from flask import Flask, request, redirect, url_for, Response
 from flask import render_template
 from flask import g # global session-level object
 from flask import session
 
 from aslite.db import get_papers_db, get_metas_db, get_tags_db, get_last_active_db, get_email_db
 from aslite.db import load_features
-from aslite.search import search
+from aslite.search import build_index, search
 
 # -----------------------------------------------------------------------------
 # inits and globals
 
 RET_NUM = 25 # number of papers to return per page
 
-app = Flask(__name__)
+# static files live in public/static so that Vercel serves them from its CDN
+app = Flask(__name__, static_folder='public/static', static_url_path='/static')
 
 # set the secret key so we can cryptographically sign cookies and maintain sessions
-if os.path.isfile('secret_key.txt'):
+if os.environ.get('SECRET_KEY'):
+    sk = os.environ['SECRET_KEY']
+elif os.path.isfile('secret_key.txt'):
     # example of generating a good key on your system is:
     # import secrets; secrets.token_urlsafe(16)
     sk = open('secret_key.txt').read().strip()
@@ -41,6 +45,22 @@ else:
     sk = 'devkey'
 app.secret_key = sk
 
+# optional password for the whole site (HTTP basic auth, any username), since the
+# login below is username-only. set this whenever the site is reachable from the internet.
+SITE_PASSWORD = os.environ.get('SITE_PASSWORD', '')
+
+# papers and features change at most daily (when compute.py runs), so keep them in
+# memory across requests instead of re-reading the whole database every time
+CACHE_TTL = 10 * 60 # seconds
+_cache = {}
+
+def cached(name, fn):
+    t, v = _cache.get(name, (0, None))
+    if time.time() - t > CACHE_TTL:
+        v = fn()
+        _cache[name] = (time.time(), v)
+    return v
+
 # -----------------------------------------------------------------------------
 # globals that manage the (lazy) loading of various state for a request
 
@@ -48,7 +68,7 @@ def get_tags():
     if g.user is None:
         return {}
     if not hasattr(g, '_tags'):
-        with get_tags_db() as tags_db:
+        with get_tags_db(flag='c') as tags_db: # 'c': on a fresh install the tags table may not exist yet
             tags_dict = tags_db[g.user] if g.user in tags_db else {}
         g._tags = tags_dict
     return g._tags
@@ -65,6 +85,11 @@ def get_metas():
 
 @app.before_request
 def before_request():
+    if SITE_PASSWORD:
+        auth = request.authorization
+        if not (auth and secrets.compare_digest((auth.password or '').encode(), SITE_PASSWORD.encode())):
+            return Response('password required', 401, {'WWW-Authenticate': 'Basic realm="arxiv-sanity"'})
+
     g.user = session.get('user', None)
 
     # record activity on this user so we can reserve periodic
@@ -88,8 +113,8 @@ def render_pid(pid):
     # render a single paper with just the information we need for the UI
     pdb = get_papers()
     tags = get_tags()
-    thumb_path = 'static/thumb/' + pid + '.jpg'
-    thumb_url = thumb_path if os.path.isfile(thumb_path) else ''
+    thumb_path = os.path.join(app.static_folder, 'thumb', pid + '.jpg')
+    thumb_url = 'static/thumb/' + pid + '.jpg' if os.path.isfile(thumb_path) else ''
     d = pdb[pid]
     return dict(
         weight = 0.0,
@@ -126,7 +151,7 @@ def svm_rank(tags: str = '', pid: str = '', C: float = 0.01):
         return [], [], []
 
     # load all of the features
-    features = load_features()
+    features = cached('features', load_features)
     x, pids = features['x'], features['pids']
     n, d = x.shape
     ptoi, itop = {}, {}
@@ -173,7 +198,8 @@ def svm_rank(tags: str = '', pid: str = '', C: float = 0.01):
 def search_rank(q: str = ''):
     if not q:
         return [], [] # no query? no results
-    return search(q, get_papers())
+    index = cached('search_index', lambda: build_index(get_papers()))
+    return search(q, index)
 
 # -----------------------------------------------------------------------------
 # primary application endpoints
@@ -293,7 +319,7 @@ def inspect():
         return "error, malformed pid" # todo: better error handling
 
     # load the tfidf vectors, the vocab, and the idf table
-    features = load_features()
+    features = cached('features', load_features)
     x = features['x']
     idf = features['idf']
     ivocab = {v:k for k,v in features['vocab'].items()}

@@ -32,23 +32,27 @@ if __name__ == '__main__':
 
     pdb = get_papers_db(flag='r')
 
+    # read all papers in one pass (one query when the db is Postgres, instead of one per paper)
+    docs = {}
+    for p, d in pdb.items():
+        author_str = ' '.join([a['name'] for a in d['authors']])
+        docs[p] = ' '.join([d['title'], d['summary'], author_str])
+
     def make_corpus(training: bool):
         assert isinstance(training, bool)
 
         # determine which papers we will use to build tfidf
-        if training and args.max_docs > 0 and args.max_docs < len(pdb):
+        if training and args.max_docs > 0 and args.max_docs < len(docs):
             # crop to a random subset of papers
-            keys = list(pdb.keys())
+            keys = list(docs.keys())
             shuffle(keys)
             keys = keys[:args.max_docs]
         else:
-            keys = pdb.keys()
+            keys = docs.keys()
 
         # yield the abstracts of the papers
         for p in keys:
-            d = pdb[p]
-            author_str = ' '.join([a['name'] for a in d['authors']])
-            yield ' '.join([d['title'], d['summary'], author_str])
+            yield docs[p]
 
     print("training tfidf vectors...")
     v.fit(make_corpus(training=True))
@@ -59,7 +63,7 @@ if __name__ == '__main__':
 
     print("saving to features to disk...")
     features = {
-        'pids': list(pdb.keys()),
+        'pids': list(docs.keys()),
         'x': x,
         'vocab': v.vocabulary_,
         'idf': v._tfidf.idf_,

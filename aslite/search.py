@@ -100,14 +100,18 @@ def score_paper(terms, fields):
             score += tscore * t['nwords'] # longer phrases are more specific, reward them
     return score
 
-def search(q, pdb):
-    """ searches the papers dict-like pdb, returns (pids, scores) sorted by descending score """
+def build_index(pdb):
+    """ precomputes the searchable fields of every paper in the dict-like pdb, for search() """
+    return {pid: paper_fields(p) for pid, p in pdb.items()}
+
+def search(q, index):
+    """ searches an index from build_index(), returns (pids, scores) sorted by descending score """
     terms = parse_query(q)
     if not any(t['mod'] != '-' for t in terms):
         return [], [] # no positive terms? no results
     pairs = []
-    for pid, p in pdb.items():
-        score = score_paper(terms, paper_fields(p))
+    for pid, fields in index.items():
+        score = score_paper(terms, fields)
         if score:
             pairs.append((score, pid))
     pairs.sort(reverse=True)
