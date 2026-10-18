@@ -11,10 +11,14 @@ Keyword search over papers, with a small query language:
 
 Prefixes combine, e.g. +au:"yann lecun" or -ti:survey.
 Matching is case and accent insensitive (Schölkopf == scholkopf).
+
+The same queries can also be sent to the live arXiv API with to_arxiv_query(),
+where every term is required (AND), excluded terms become ANDNOT, and * is ignored.
 """
 
 import re
 import unicodedata
+import urllib.parse
 
 # score weights per field, per matched term
 FIELD_WEIGHTS = {'au': 10.0, 'ti': 20.0, 'abs': 1.0}
@@ -41,10 +45,10 @@ def _make_pattern(words, prefix):
     tail = r'\w*' if prefix else r'(?:e?s)?(?!\w)' # allow a plural ending on the last word
     return re.compile(r'(?<!\w)' + body + tail)
 
-def parse_query(q):
+def tokenize(q):
     """
-    parses the raw query string into a list of terms, each a dict with
-    keys: mod ('' | '+' | '-'), fields (tuple), pattern (compiled regex), nwords (int)
+    splits the raw query string into terms, each a dict with keys: mod ('' | '+' | '-'),
+    fields (tuple), words (list of str), prefix (bool, for a trailing *)
     """
     terms = []
     for m in TOKEN_RE.finditer(normalize(q)):
@@ -62,13 +66,42 @@ def parse_query(q):
         words = re.findall(r'\w+', text)
         if not words:
             continue # e.g. a lone "-" or "*" or empty quotes
-        terms.append({
-            'mod': mod,
-            'fields': fields,
-            'pattern': _make_pattern(words, prefix),
-            'nwords': len(words),
-        })
+        terms.append({'mod': mod, 'fields': fields, 'words': words, 'prefix': prefix})
     return terms
+
+def parse_query(q):
+    """
+    parses the raw query string into a list of terms, each a dict with
+    keys: mod ('' | '+' | '-'), fields (tuple), pattern (compiled regex), nwords (int)
+    """
+    return [{
+        'mod': t['mod'],
+        'fields': t['fields'],
+        'pattern': _make_pattern(t['words'], t['prefix']),
+        'nwords': len(t['words']),
+    } for t in tokenize(q)]
+
+def to_arxiv_query(q):
+    """
+    translates a query into the search_query parameter of the arXiv API (already url-encoded),
+    e.g. 'au:lecun "self supervised" -survey' -> au:lecun+AND+all:%22self+supervised%22+ANDNOT+all:survey
+    returns '' if the query has no positive terms, since arXiv can't search for "everything except"
+    """
+    pos, neg = [], []
+    for t in tokenize(q):
+        field = t['fields'][0] if len(t['fields']) == 1 else 'all'
+        text = ' '.join(t['words'])
+        if len(t['words']) > 1:
+            text = '"' + text + '"'
+        (neg if t['mod'] == '-' else pos).append(field + ':' + text)
+    if not pos:
+        return ''
+    s = ' AND '.join(pos)
+    if len(pos) > 1 and neg:
+        s = '(' + s + ')'
+    for n in neg:
+        s += ' ANDNOT ' + n
+    return urllib.parse.quote_plus(s, safe=':')
 
 def paper_fields(p):
     """ extracts the normalized searchable text fields of a paper """

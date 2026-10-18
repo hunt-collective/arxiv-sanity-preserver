@@ -3,9 +3,13 @@
 
 This repository is based on [karpathy/arxiv-sanity-lite](https://github.com/karpathy/arxiv-sanity-lite) (commit d7a303b), which replaced the older arxiv-sanity-preserver code. The goal of this fork is to add features for sourcing researchers by keyword.
 
+#### Search
+
+A search runs live on all of arXiv through the [arXiv API](https://info.arxiv.org/help/api/user-manual.html) (rank "arxiv (live)", the default when you type a query), and the results are saved to the database so they can be tagged and inspected. Rank "search (saved)" searches only the papers already in the database instead. Live searches are cached for 10 minutes and spaced at least 3 seconds apart, as the arXiv API terms ask. Similarity features ("rank by tags", "similar papers") only cover papers that `compute.py` has processed, so a freshly fetched paper joins those after the next daily update.
+
 #### Search syntax
 
-Terms match whole words, ignoring case and accents, and plurals match too. Papers are ranked by how many terms match, with title matches weighted most, then authors, then the abstract.
+Terms match whole words, ignoring case and accents, and plurals match too. In a saved search, papers are ranked by how many terms match, with title matches weighted most, then authors, then the abstract. In a live arXiv search every term is required, results come in arXiv's relevance order, and `*` is ignored.
 
 - `diffusion` a plain term (`rl` will not match "world")
 - `"graph neural network"` an exact phrase

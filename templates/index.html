@@ -40,7 +40,8 @@ var move_page = function(int_offset) {
                 <!-- rank type: one of tags, pid, time, or random -->
                 <label for="rank_type">Rank by:</label>
                 <select name="rank" id="rank_select">
-                    <option value="search" {{ gvars.rank == 'search' and 'selected' }}>search</option>
+                    <option value="arxiv" {{ gvars.rank == 'arxiv' and 'selected' }}>arxiv (live)</option>
+                    <option value="search" {{ gvars.rank == 'search' and 'selected' }}>search (saved)</option>
                     <option value="tags" {{ gvars.rank == 'tags' and 'selected' }}>tags</option>
                     <option value="pid" {{ gvars.rank == 'pid' and 'selected' }}>pid</option>
                     <option value="time" {{ gvars.rank == 'time' and 'selected' }}>time</option>
@@ -95,6 +96,10 @@ var move_page = function(int_offset) {
 {% if user and words %}
 <div id="wordwrap" style="display:none;">
 </div>
+{% endif %}
+
+{% if message %}
+<div id="message">{{ message }}</div>
 {% endif %}
 
 <!-- main content showing all the papers as a list -->
