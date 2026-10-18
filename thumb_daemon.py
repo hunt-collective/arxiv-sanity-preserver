@@ -17,7 +17,7 @@ TMP_DIR = 'tmp'
 if not os.path.exists(TMP_DIR):
     os.makedirs(TMP_DIR)
 # create the thumb directory, where we will store the paper thumbnails
-THUMB_DIR = os.path.join('static', 'thumb')
+THUMB_DIR = os.path.join('public', 'static', 'thumb')
 if not os.path.exists(THUMB_DIR):
     os.makedirs(THUMB_DIR)
 

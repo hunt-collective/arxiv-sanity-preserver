@@ -15,6 +15,19 @@ Terms match whole words, ignoring case and accents, and plurals match too. Paper
 
 These combine, e.g. `+au:"yann lecun" "self-supervised" -ti:survey`. The same help is on the site's About page.
 
+#### Deploying on Vercel
+
+Locally everything is stored in files under `data/`. When the `DATABASE_URL` environment variable is set, all state (papers, tags, features) lives in that Postgres database instead, which is what makes the site work on Vercel, whose filesystem does not persist. The pieces:
+
+1. **Database.** Create a Postgres database, e.g. a new [Neon](https://neon.tech) project, and copy its connection string. The tables are created automatically on first use.
+2. **Paper updates.** `.github/workflows/update.yml` runs `arxiv_daemon.py` and `compute.py` daily on GitHub Actions. Add the connection string as the repository secret `DATABASE_URL` (Settings → Secrets and variables → Actions). For the first fill, run the workflow by hand (Actions → update papers → Run workflow) with a larger number, e.g. 10000.
+3. **Web app.** Import this repository as a new Vercel project (Vercel detects Flask, and `pyproject.toml` tells it the app is `serve:app`) and set these environment variables:
+   - `DATABASE_URL`: the same connection string (Neon's pooled one is best here)
+   - `SECRET_KEY`: a long random string, e.g. from `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+   - `SITE_PASSWORD`: a password for the whole site. Logins are username-only, so without this anyone with the URL can see and change your tags.
+
+Static files are in `public/static`, which Vercel serves from its CDN. Paper thumbnails (`thumb_daemon.py`) only work when running locally.
+
 A much lighter-weight arxiv-sanity from-scratch re-write. Periodically polls arxiv API for new papers. Then allows users to tag papers of interest, and recommends new papers for each tag based on SVMs over tfidf features of paper abstracts. Allows one to search, rank, sort, slice and dice these results in a pretty web UI. Lastly, arxiv-sanity-lite can send you daily emails with recommendations of new papers based on your tags. Curate your tags, track recent papers in your area, and don't miss out!
 
 I am running a live version of this code on [arxiv-sanity-lite.com](https://arxiv-sanity-lite.com).

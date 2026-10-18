@@ -1,0 +1,17 @@
+# Used by Vercel. Keep dependencies in sync with requirements.txt,
+# which local installs and the GitHub Actions update job use.
+[project]
+name = "arxiv-sanity"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "feedparser>=6.0.8",
+    "Flask>=2.0.2",
+    "numpy>=1.21.4",
+    "scikit-learn>=1.0.1",
+    "sqlitedict>=1.7.0",
+    "psycopg[binary]>=3.1",
+]
+
+[tool.vercel]
+entrypoint = "serve:app"
