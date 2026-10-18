@@ -21,7 +21,7 @@ Locally everything is stored in files under `data/`. When the `DATABASE_URL` env
 
 1. **Database.** Create a Postgres database, e.g. a new [Neon](https://neon.tech) project, and copy its connection string. The tables are created automatically on first use.
 2. **Paper updates.** `.github/workflows/update.yml` runs `arxiv_daemon.py` and `compute.py` daily on GitHub Actions. Add the connection string as the repository secret `DATABASE_URL` (Settings → Secrets and variables → Actions). For the first fill, run the workflow by hand (Actions → update papers → Run workflow) with a larger number, e.g. 10000.
-3. **Web app.** Import this repository as a new Vercel project (framework preset: Other; Vercel picks up `app.py` and `requirements.txt`) and set these environment variables:
+3. **Web app.** Import this repository as a new Vercel project (Vercel detects Flask, and `pyproject.toml` tells it the app is `serve:app`) and set these environment variables:
    - `DATABASE_URL`: the same connection string (Neon's pooled one is best here)
    - `SECRET_KEY`: a long random string, e.g. from `python -c "import secrets; print(secrets.token_urlsafe(32))"`
    - `SITE_PASSWORD`: a password for the whole site. Logins are username-only, so without this anyone with the URL can see and change your tags.

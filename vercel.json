@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "app.py": {
+    "serve.py": {
       "maxDuration": 60,
       "excludeFiles": "{data/**,public/**,screenshot.jpg,.github/**}"
     }
